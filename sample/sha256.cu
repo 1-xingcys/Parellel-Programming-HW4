@@ -21,12 +21,24 @@
 extern "C"{
 #endif  //__cplusplus
 
-// GPU 上的 swap 函數
-__device__ void _swap_gpu(BYTE &x, BYTE &y) {
-    BYTE temp = x;
+// ===================== GPU helpers =====================
+
+__device__ __forceinline__ void _swap_gpu(BYTE &x, BYTE &y) {
+    BYTE t = x;
     x = y;
-    y = temp;
+    y = t;
 }
+
+__device__ __forceinline__ WORD rotr_gpu(WORD v, int s) {
+#if __CUDA_ARCH__ >= 350
+    // funnel shift: rotate right s bits
+    return __funnelshift_r(v, v, s);
+#else
+    return (v >> s) | (v << (32 - s));
+#endif
+}
+
+// ===================== Constants =======================
 
 static const WORD k_cpu[64] = {
 	0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
@@ -39,8 +51,7 @@ static const WORD k_cpu[64] = {
 	0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
 };
 
-// SHA-256 的 K 常數，放入 __constant__ 記憶體以獲得最快速度
-// __device__ 函數會自動使用此版本
+// 放在 constant memory（GPU 廣播快取）
 __constant__ WORD k_gpu[64] = {
     0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
     0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
@@ -52,107 +63,143 @@ __constant__ WORD k_gpu[64] = {
     0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
 };
 
-// GPU 版本的 sha256_transform
-__device__ void sha256_transform_gpu(SHA256 *ctx, const BYTE *msg)
+// ===================== GPU sha256 core =======================
+
+// 使用 16-word 環形 buffer 的 transform：省暫存器、穩健快速
+__device__ __forceinline__ void sha256_transform_gpu(SHA256 *ctx, const BYTE *msg)
 {
-    WORD a, b, c, d, e, f, g, h;
-    WORD i, j;
-    
-    WORD w[64];
-    for(i=0, j=0;i<16;++i, j+=4)
-    {
-        w[i] = (msg[j]<<24) | (msg[j+1]<<16) | (msg[j+2]<<8) | (msg[j+3]);
+    WORD w[16];
+
+    // 前 16 個 word
+#pragma unroll
+    for (int i = 0, j = 0; i < 16; ++i, j += 4) {
+        w[i] = ( (WORD)msg[j]   << 24 ) |
+               ( (WORD)msg[j+1] << 16 ) |
+               ( (WORD)msg[j+2] <<  8 ) |
+               ( (WORD)msg[j+3]       );
     }
-    
-    for(i=16;i<64;++i)
-    {
-        WORD s0 = (_rotr(w[i-15], 7)) ^ (_rotr(w[i-15], 18)) ^ (w[i-15]>>3);
-        WORD s1 = (_rotr(w[i-2], 17)) ^ (_rotr(w[i-2], 19))  ^ (w[i-2]>>10);
-        w[i] = w[i-16] + s0 + w[i-7] + s1;
-    }
-    
-    a = ctx->h[0]; b = ctx->h[1]; c = ctx->h[2]; d = ctx->h[3];
-    e = ctx->h[4]; f = ctx->h[5]; g = ctx->h[6]; h = ctx->h[7];
-    
-    for(i=0;i<64;++i)
-    {
-        WORD S0 = (_rotr(a, 2)) ^ (_rotr(a, 13)) ^ (_rotr(a, 22));
-        WORD S1 = (_rotr(e, 6)) ^ (_rotr(e, 11)) ^ (_rotr(e, 25));
-        WORD ch = (e & f) ^ ((~e) & g);
+
+    WORD a = ctx->h[0];
+    WORD b = ctx->h[1];
+    WORD c = ctx->h[2];
+    WORD d = ctx->h[3];
+    WORD e = ctx->h[4];
+    WORD f = ctx->h[5];
+    WORD g = ctx->h[6];
+    WORD h = ctx->h[7];
+
+#pragma unroll
+    for (int i = 0; i < 64; ++i) {
+        WORD Wt;
+        if (i < 16) {
+            Wt = w[i];
+        } else {
+            WORD w15 = w[(i - 15) & 15];
+            WORD w2  = w[(i - 2)  & 15];
+            WORD s0 = rotr_gpu(w15, 7) ^ rotr_gpu(w15, 18) ^ (w15 >> 3);
+            WORD s1 = rotr_gpu(w2, 17) ^ rotr_gpu(w2, 19)  ^ (w2 >> 10);
+            Wt = w[i & 15] + s0 + w[(i - 7) & 15] + s1;
+            w[i & 15] = Wt;
+        }
+
+        WORD S1  = rotr_gpu(e, 6) ^ rotr_gpu(e, 11) ^ rotr_gpu(e, 25);
+        WORD ch  = (e & f) ^ ((~e) & g);
+        WORD temp1 = h + S1 + ch + k_gpu[i] + Wt;
+
+        WORD S0  = rotr_gpu(a, 2) ^ rotr_gpu(a, 13) ^ rotr_gpu(a, 22);
         WORD maj = (a & b) ^ (a & c) ^ (b & c);
-        WORD temp1 = h + S1 + ch + k_gpu[i] + w[i];
         WORD temp2 = S0 + maj;
-        
-        h = g; g = f; f = e; e = d + temp1;
-        d = c; c = b; b = a; a = temp1 + temp2;
+
+        h = g;
+        g = f;
+        f = e;
+        e = d + temp1;
+        d = c;
+        c = b;
+        b = a;
+        a = temp1 + temp2;
     }
-    
-    ctx->h[0] += a; ctx->h[1] += b; ctx->h[2] += c; ctx->h[3] += d;
-    ctx->h[4] += e; ctx->h[5] += f; ctx->h[6] += g; ctx->h[7] += h;
+
+    ctx->h[0] += a;
+    ctx->h[1] += b;
+    ctx->h[2] += c;
+    ctx->h[3] += d;
+    ctx->h[4] += e;
+    ctx->h[5] += f;
+    ctx->h[6] += g;
+    ctx->h[7] += h;
 }
 
-// GPU 版本的 sha256 (完整版，包含 padding)
+// 通用 GPU 版 sha256（含 padding）
 __device__ void sha256_gpu(SHA256 *ctx, const BYTE *msg, size_t len)
 {
-    // 初始化 HASH
-    ctx->h[0] = 0x6a09e667; ctx->h[1] = 0xbb67ae85;
-    ctx->h[2] = 0x3c6ef372; ctx->h[3] = 0xa54ff53a;
-    ctx->h[4] = 0x510e527f; ctx->h[5] = 0x9b05688c;
-    ctx->h[6] = 0x1f83d9ab; ctx->h[7] = 0x5be0cd19;
-    
-    WORD i, j;
-    size_t remain = len % 64;
-    size_t total_len = len - remain;
-    
-    for(i=0;i<total_len;i+=64)
-    {
-        sha256_transform_gpu(ctx, &msg[i]);
+    // init
+    ctx->h[0] = 0x6a09e667;
+    ctx->h[1] = 0xbb67ae85;
+    ctx->h[2] = 0x3c6ef372;
+    ctx->h[3] = 0xa54ff53a;
+    ctx->h[4] = 0x510e527f;
+    ctx->h[5] = 0x9b05688c;
+    ctx->h[6] = 0x1f83d9ab;
+    ctx->h[7] = 0x5be0cd19;
+
+    size_t i = 0;
+
+    // 處理完整 64-byte block
+    while (i + 64 <= len) {
+        sha256_transform_gpu(ctx, msg + i);
+        i += 64;
     }
-    
-    BYTE m[64];
-    // GPU 版本的 memset
-    for(int k=0; k<64; k++) m[k] = 0;
-    
-    // GPU 版本的 memcpy
-    for(i=total_len, j=0;i<len;++i, ++j)
-    {
-        m[j] = msg[i];
+
+    // 準備最後一個（或兩個） block
+    BYTE block[64];
+
+    size_t rem = len - i;
+#pragma unroll
+    for (size_t j = 0; j < rem; ++j) {
+        block[j] = msg[i + j];
     }
-    
-    m[j++] = 0x80;
-    
-    if(j > 56)
-    {
-        sha256_transform_gpu(ctx, m);
-        for(int k=0; k<64; k++) m[k] = 0; // GPU memset
+
+    block[rem++] = 0x80;  // append '1' bit
+
+    if (rem > 56) {
+        // 填 0 到 64
+#pragma unroll
+        for (size_t j = rem; j < 64; ++j) block[j] = 0;
+        sha256_transform_gpu(ctx, block);
+        rem = 0;
     }
-    
-    unsigned long long L = len * 8;
-    m[63] = L;
-    m[62] = L >> 8;
-    m[61] = L >> 16;
-    m[60] = L >> 24;
-    m[59] = L >> 32;
-    m[58] = L >> 40;
-    m[57] = L >> 48;
-    m[56] = L >> 56;
-    sha256_transform_gpu(ctx, m);
-    
-    // 轉換為 Big-Endian 輸出 (用於比較)
-    for(i=0;i<32;i+=4)
-    {
-        _swap_gpu(ctx->b[i], ctx->b[i+3]);
-        _swap_gpu(ctx->b[i+1], ctx->b[i+2]);
+
+    // 填 0 到 56
+#pragma unroll
+    for (size_t j = rem; j < 56; ++j) block[j] = 0;
+
+    unsigned long long bitlen = (unsigned long long)len * 8ULL;
+    block[63] = (BYTE)(bitlen      );
+    block[62] = (BYTE)(bitlen >> 8 );
+    block[61] = (BYTE)(bitlen >>16 );
+    block[60] = (BYTE)(bitlen >>24 );
+    block[59] = (BYTE)(bitlen >>32 );
+    block[58] = (BYTE)(bitlen >>40 );
+    block[57] = (BYTE)(bitlen >>48 );
+    block[56] = (BYTE)(bitlen >>56 );
+
+    sha256_transform_gpu(ctx, block);
+
+    // output big-endian bytes (跟 CPU 版一致)
+#pragma unroll
+    for (int j = 0; j < 32; j += 4) {
+        _swap_gpu(ctx->b[j],   ctx->b[j+3]);
+        _swap_gpu(ctx->b[j+1], ctx->b[j+2]);
     }
 }
 
-// GPU 版本的 double_sha256
+// 正確版 double_sha256_gpu：第二輪只吃 32 bytes digest
 __device__ void double_sha256_gpu(SHA256 *sha256_ctx, const BYTE *bytes, size_t len)
 {
     SHA256 tmp;
     sha256_gpu(&tmp, bytes, len);
-    // 第二次 hash 的輸入是第一次的 32-byte (sizeof(tmp)) 結果
-    sha256_gpu(sha256_ctx, tmp.b, sizeof(tmp));
+    sha256_gpu(sha256_ctx, tmp.b, 32);  // 只對 32-byte hash 做第二輪
 }
 
 void sha256_transform_cpu(SHA256 *ctx, const BYTE *msg)
@@ -160,15 +207,12 @@ void sha256_transform_cpu(SHA256 *ctx, const BYTE *msg)
 	WORD a, b, c, d, e, f, g, h;
 	WORD i, j;
 	
-	// Create a 64-entry message schedule array w[0..63] of 32-bit words
 	WORD w[64];
-	// Copy chunk into first 16 words w[0..15] of the message schedule array
 	for(i=0, j=0;i<16;++i, j+=4)
 	{
 		w[i] = (msg[j]<<24) | (msg[j+1]<<16) | (msg[j+2]<<8) | (msg[j+3]);
 	}
 	
-	// Extend the first 16 words into the remaining 48 words w[16..63] of the message schedule array:
 	for(i=16;i<64;++i)
 	{
 		WORD s0 = (_rotr(w[i-15], 7)) ^ (_rotr(w[i-15], 18)) ^ (w[i-15]>>3);
@@ -176,8 +220,6 @@ void sha256_transform_cpu(SHA256 *ctx, const BYTE *msg)
 		w[i] = w[i-16] + s0 + w[i-7] + s1;
 	}
 	
-	
-	// Initialize working variables to current hash value
 	a = ctx->h[0];
 	b = ctx->h[1];
 	c = ctx->h[2];
@@ -187,7 +229,6 @@ void sha256_transform_cpu(SHA256 *ctx, const BYTE *msg)
 	g = ctx->h[6];
 	h = ctx->h[7];
 	
-	// Compress function main loop:
 	for(i=0;i<64;++i)
 	{
 		WORD S0 = (_rotr(a, 2)) ^ (_rotr(a, 13)) ^ (_rotr(a, 22));
@@ -207,7 +248,6 @@ void sha256_transform_cpu(SHA256 *ctx, const BYTE *msg)
 		a = temp1 + temp2;
 	}
 	
-	// Add the compressed chunk to the current hash value
 	ctx->h[0] += a;
 	ctx->h[1] += b;
 	ctx->h[2] += c;
@@ -216,13 +256,10 @@ void sha256_transform_cpu(SHA256 *ctx, const BYTE *msg)
 	ctx->h[5] += f;
 	ctx->h[6] += g;
 	ctx->h[7] += h;
-	
 }
 
 void sha256_cpu(SHA256 *ctx, const BYTE *msg, size_t len)
 {
-	// Initialize hash values:
-	// (first 32 bits of the fractional parts of the square roots of the first 8 primes 2..19):
 	ctx->h[0] = 0x6a09e667;
 	ctx->h[1] = 0xbb67ae85;
 	ctx->h[2] = 0x3c6ef372;
@@ -232,38 +269,30 @@ void sha256_cpu(SHA256 *ctx, const BYTE *msg, size_t len)
 	ctx->h[6] = 0x1f83d9ab;
 	ctx->h[7] = 0x5be0cd19;
 	
-	
 	WORD i, j;
 	size_t remain = len % 64;
 	size_t total_len = len - remain;
 	
-	// Process the message in successive 512-bit chunks
-	// For each chunk:
 	for(i=0;i<total_len;i+=64)
 	{
 		sha256_transform_cpu(ctx, &msg[i]);
 	}
 	
-	// Process remain data
 	BYTE m[64] = {};
 	for(i=total_len, j=0;i<len;++i, ++j)
 	{
 		m[j] = msg[i];
 	}
 	
-	// Append a single '1' bit
-	m[j++] = 0x80;  //1000 0000
+	m[j++] = 0x80;
 	
-	// Append K '0' bits, where k is the minimum number >= 0 such that L + 1 + K + 64 is a multiple of 512
 	if(j > 56)
 	{
 		sha256_transform_cpu(ctx, m);
 		memset(m, 0, sizeof(m));
-		printf("true\n");
 	}
 	
-	// Append L as a 64-bit bug-endian integer, making the total post-processed length a multiple of 512 bits
-	unsigned long long L = len * 8;  //bits
+	unsigned long long L = (unsigned long long)len * 8ULL;
 	m[63] = L;
 	m[62] = L >> 8;
 	m[61] = L >> 16;
@@ -274,11 +303,9 @@ void sha256_cpu(SHA256 *ctx, const BYTE *msg, size_t len)
 	m[56] = L >> 56;
 	sha256_transform_cpu(ctx, m);
 	
-	// Produce the final hash value (little-endian to big-endian)
-	// Swap 1st & 4th, 2nd & 3rd byte for each word
 	for(i=0;i<32;i+=4)
 	{
-        _swap_cpu(ctx->b[i], ctx->b[i+3]);
+        _swap_cpu(ctx->b[i],   ctx->b[i+3]);
         _swap_cpu(ctx->b[i+1], ctx->b[i+2]);
 	}
 }
