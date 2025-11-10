@@ -3,6 +3,8 @@
 
 #include <stddef.h>
 
+#include <cuda_runtime.h>
+
 #ifdef __cplusplus
 extern "C"{
 #endif  //__cplusplus
@@ -17,8 +19,12 @@ typedef union _sha256_ctx{
 }SHA256;
 
 //----------- FUNCTION DECLARATION --------
-void sha256_transform(SHA256 *ctx, const BYTE *msg);
-void sha256(SHA256 *ctx, const BYTE *msg, size_t len);
+void sha256_transform_cpu(SHA256 *ctx, const BYTE *msg);
+void sha256_cpu(SHA256 *ctx, const BYTE *msg, size_t len);
+
+__device__ void sha256_transform_gpu(SHA256 *ctx, const BYTE *msg);
+__device__ void sha256_gpu(SHA256 *ctx, const BYTE *msg, size_t len);
+__device__ void double_sha256_gpu(SHA256 *sha256_ctx, const BYTE *bytes, size_t len);
 
 
 #ifdef __cplusplus
