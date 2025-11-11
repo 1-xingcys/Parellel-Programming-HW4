@@ -194,6 +194,109 @@ __device__ void sha256_gpu(SHA256 *ctx, const BYTE *msg, size_t len)
     }
 }
 
+// 專門給 80-byte 區塊頭用的 Double SHA-256 特化版
+// 輸入：block_80_bytes = 區塊頭序列化後的 80 bytes
+// 輸出：final_hash_ctx->b 內為「大端」32-byte 雜湊值（和一般實作一致）
+__device__
+void double_sha256_bitcoin_specialized(SHA256 *final_hash_ctx, const BYTE *block_80_bytes)
+{
+    // ---------- Round 1: SHA256( block_header[80] ) ----------
+
+    SHA256 r1_ctx;
+    BYTE   r1_chunk2[64];
+
+    // 初始化 Round 1 狀態
+    r1_ctx.h[0] = 0x6a09e667; r1_ctx.h[1] = 0xbb67ae85;
+    r1_ctx.h[2] = 0x3c6ef372; r1_ctx.h[3] = 0xa54ff53a;
+    r1_ctx.h[4] = 0x510e527f; r1_ctx.h[5] = 0x9b05688c;
+    r1_ctx.h[6] = 0x1f83d9ab; r1_ctx.h[7] = 0x5be0cd19;
+
+    // Block 0: 前 64 bytes
+    sha256_transform_gpu(&r1_ctx, block_80_bytes);
+
+    // Block 1: 剩下 16 bytes + padding + 長度(640 bits)
+    // 先放 16 bytes
+#pragma unroll
+    for (int i = 0; i < 16; ++i) {
+        r1_chunk2[i] = block_80_bytes[64 + i];
+    }
+
+    // 接著是 0x80
+    r1_chunk2[16] = 0x80;
+
+    // 填零到第 55 位
+#pragma unroll
+    for (int i = 17; i < 56; ++i) {
+        r1_chunk2[i] = 0x00;
+    }
+
+    // 最後 8 bytes = 80 * 8 = 640 bits = 0x0000000000000280 (big-endian)
+    r1_chunk2[56] = 0x00;
+    r1_chunk2[57] = 0x00;
+    r1_chunk2[58] = 0x00;
+    r1_chunk2[59] = 0x00;
+    r1_chunk2[60] = 0x00;
+    r1_chunk2[61] = 0x00;
+    r1_chunk2[62] = 0x02;
+    r1_chunk2[63] = 0x80;
+
+    // 處理 Block 1
+    sha256_transform_gpu(&r1_ctx, r1_chunk2);
+
+    // Round 1 結束：把 state 轉成 Big-Endian 32-byte digest（放在 r1_ctx.b）
+#pragma unroll
+    for (int i = 0; i < 32; i += 4) {
+        _swap_gpu(r1_ctx.b[i],     r1_ctx.b[i + 3]);
+        _swap_gpu(r1_ctx.b[i + 1], r1_ctx.b[i + 2]);
+    }
+
+    // ---------- Round 2: SHA256( Round1_digest[32] ) ----------
+
+    BYTE r2_block[64];
+
+    // 初始化 Round 2 狀態
+    final_hash_ctx->h[0] = 0x6a09e667; final_hash_ctx->h[1] = 0xbb67ae85;
+    final_hash_ctx->h[2] = 0x3c6ef372; final_hash_ctx->h[3] = 0xa54ff53a;
+    final_hash_ctx->h[4] = 0x510e527f; final_hash_ctx->h[5] = 0x9b05688c;
+    final_hash_ctx->h[6] = 0x1f83d9ab; final_hash_ctx->h[7] = 0x5be0cd19;
+
+    // 前 32 bytes = Round 1 digest
+#pragma unroll
+    for (int i = 0; i < 32; ++i) {
+        r2_block[i] = r1_ctx.b[i];
+    }
+
+    // padding: 0x80
+    r2_block[32] = 0x80;
+
+    // 填零到第 55 位
+#pragma unroll
+    for (int i = 33; i < 56; ++i) {
+        r2_block[i] = 0x00;
+    }
+
+    // 長度 = 32 * 8 = 256 bits = 0x0000000000000100 (big-endian)
+    r2_block[56] = 0x00;
+    r2_block[57] = 0x00;
+    r2_block[58] = 0x00;
+    r2_block[59] = 0x00;
+    r2_block[60] = 0x00;
+    r2_block[61] = 0x00;
+    r2_block[62] = 0x01;
+    r2_block[63] = 0x00;
+
+    // 單一 block
+    sha256_transform_gpu(final_hash_ctx, r2_block);
+
+    // 最終輸出：轉成 Big-Endian（和 CPU sha256_cpu 最後一步對齊）
+#pragma unroll
+    for (int i = 0; i < 32; i += 4) {
+        _swap_gpu(final_hash_ctx->b[i],     final_hash_ctx->b[i + 3]);
+        _swap_gpu(final_hash_ctx->b[i + 1], final_hash_ctx->b[i + 2]);
+    }
+}
+
+
 // 正確版 double_sha256_gpu：第二輪只吃 32 bytes digest
 __device__ void double_sha256_gpu(SHA256 *sha256_ctx, const BYTE *bytes, size_t len)
 {

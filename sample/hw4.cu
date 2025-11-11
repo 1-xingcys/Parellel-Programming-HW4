@@ -125,7 +125,7 @@ void double_sha256(SHA256 *sha256_ctx, unsigned char *bytes, size_t len)
 {
     SHA256 tmp;
     sha256_cpu(&tmp, (BYTE*)bytes, len);
-    sha256_cpu(sha256_ctx, (BYTE*)&tmp, sizeof(tmp));
+    sha256_cpu(sha256_ctx, (BYTE*)&tmp, 32);
 }
 
 
@@ -204,7 +204,7 @@ __constant__ unsigned char g_target_hex[32];
 //                  如果一個執行緒找到了答案，它會把 nonce 寫入這裡。
 //                  它被初始化為 0xFFFFFFFF (代表 "未找到")。
 //
-__global__ void solve_kernel(unsigned int *d_solution_nonce)
+__global__ void solve_kernel(volatile unsigned int *d_solution_nonce)
 {
     // --- 計算這個執行緒要處理的 nonce ---
     // 使用 Grid-Stride Loop
@@ -231,7 +231,8 @@ __global__ void solve_kernel(unsigned int *d_solution_nonce)
         // 執行 Device 上的 double_sha256_gpu
         // 輸入是 80-byte 的 local_block
         // 輸出是 32-byte 的 hash，儲存在 local_hash_ctx.b
-        double_sha256_gpu(&local_hash_ctx, (unsigned char*)&local_block, sizeof(local_block));
+        // double_sha256_gpu(&local_hash_ctx, (unsigned char*)&local_block, sizeof(local_block));
+        double_sha256_bitcoin_specialized(&local_hash_ctx, (unsigned char*)&local_block);
 
         // --- 檢查答案 ---
         // 比較 hash (local_hash_ctx.b) 是否小於目標 (g_target_hex)
@@ -243,7 +244,7 @@ __global__ void solve_kernel(unsigned int *d_solution_nonce)
             // 參數: (目標地址, 舊值, 新值)
             // 只有當 *d_solution_nonce 仍為 0xFFFFFFFF 時，
             // 才將它設為 n。
-            atomicCAS(d_solution_nonce, 0xFFFFFFFF, (unsigned int)n);
+            atomicCAS((unsigned int*)d_solution_nonce, 0xFFFFFFFF, (unsigned int)n);
             return;
         }
     }

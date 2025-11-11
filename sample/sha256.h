@@ -24,6 +24,7 @@ void sha256_cpu(SHA256 *ctx, const BYTE *msg, size_t len);
 
 __device__ void sha256_transform_gpu(SHA256 *ctx, const BYTE *msg);
 __device__ void sha256_gpu(SHA256 *ctx, const BYTE *msg, size_t len);
+__device__ void double_sha256_bitcoin_specialized(SHA256 *final_hash_ctx, const BYTE *block_80_bytes);
 __device__ void double_sha256_gpu(SHA256 *sha256_ctx, const BYTE *bytes, size_t len);
 
 
