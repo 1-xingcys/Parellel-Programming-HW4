@@ -14,7 +14,7 @@ for t in "${TESTS[@]}"; do
 
     # 1. 使用 Nsight Compute 收集 occupancy + 時間 (輸出存到 log)
     # 如果在 cluster 需要 srun/sbatch，在這行外面包即可。
-    ncu --metrics sm__warps_active.avg.pct_of_peak_sustained_active \
+    # ncu --metrics sm__warps_active.avg.pct_of_peak_sustained_active \
         ./sample/hw4 "$in_file" "$out_file" >"$log_file" 2>&1
 
     # 2. correctness：看 validation 有沒有出現 "correct"

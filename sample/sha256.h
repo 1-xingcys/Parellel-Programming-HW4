@@ -6,30 +6,33 @@
 #include <cuda_runtime.h>
 
 #ifdef __cplusplus
-extern "C"{
-#endif  //__cplusplus
+extern "C" {
+#endif
 
-//--------------- DATA TYPES --------------
-typedef unsigned int WORD;
+typedef unsigned int  WORD;
 typedef unsigned char BYTE;
 
-typedef union _sha256_ctx{
-	WORD h[8];
-	BYTE b[32];
-}SHA256;
+typedef union _sha256_ctx {
+    WORD h[8];
+    BYTE b[32];
+} SHA256;
 
-//----------- FUNCTION DECLARATION --------
+// CPU
 void sha256_transform_cpu(SHA256 *ctx, const BYTE *msg);
 void sha256_cpu(SHA256 *ctx, const BYTE *msg, size_t len);
 
+// GPU
 __device__ void sha256_transform_gpu(SHA256 *ctx, const BYTE *msg);
 __device__ void sha256_gpu(SHA256 *ctx, const BYTE *msg, size_t len);
-__device__ void double_sha256_bitcoin_specialized(SHA256 *final_hash_ctx, const BYTE *block_80_bytes);
-__device__ void double_sha256_gpu(SHA256 *sha256_ctx, const BYTE *bytes, size_t len);
 
+// 通用 double sha256（任意長度訊息）
+__device__ void double_sha256_gpu(SHA256 *out, const BYTE *bytes, size_t len);
+
+// 專門給 80-byte Bitcoin block header 的 double sha256
+__device__ void double_sha256_bitcoin_specialized(SHA256 *out, const BYTE *block80);
 
 #ifdef __cplusplus
 }
-#endif  //__cplusplus
+#endif
 
-#endif  //__SHA256_HEADER__
+#endif // __SHA256_HEADER__

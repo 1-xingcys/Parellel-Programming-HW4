@@ -266,10 +266,10 @@ __global__ void solve_kernel(volatile unsigned int *d_solution_nonce)
 void solve(FILE *fin, FILE *fout)
 {
     // 計時器
-    auto total_start = std::chrono::high_resolution_clock::now();
+    // auto total_start = std::chrono::high_resolution_clock::now();
     
     // **** 讀取資料 ****
-    auto stage_start = std::chrono::high_resolution_clock::now();
+    // auto stage_start = std::chrono::high_resolution_clock::now();
     
     char version[9];
     char prevhash[65];
@@ -294,26 +294,26 @@ void solve(FILE *fin, FILE *fout)
         merkle_branch[i][64] = '\0';
     }
     
-    auto stage_end = std::chrono::high_resolution_clock::now();
-    auto read_time = std::chrono::duration_cast<std::chrono::microseconds>(stage_end - stage_start).count();
-    printf("[Time] Read input data: %.3f ms\n", read_time / 1000.0);
+    // auto stage_end = std::chrono::high_resolution_clock::now();
+    // auto read_time = std::chrono::duration_cast<std::chrono::microseconds>(stage_end - stage_start).count();
+    // printf("[Time] Read input data: %.3f ms\n", read_time / 1000.0);
 
     // **** 計算 Merkle Root ****
-    stage_start = std::chrono::high_resolution_clock::now();
+    // stage_start = std::chrono::high_resolution_clock::now();
     
     unsigned char merkle_root[32];
     calc_merkle_root(merkle_root, tx, merkle_branch);
     
-    stage_end = std::chrono::high_resolution_clock::now();
-    auto merkle_time = std::chrono::duration_cast<std::chrono::microseconds>(stage_end - stage_start).count();
-    printf("[Time] Calculate Merkle Root: %.3f ms\n", merkle_time / 1000.0);
+    // stage_end = std::chrono::high_resolution_clock::now();
+    // auto merkle_time = std::chrono::duration_cast<std::chrono::microseconds>(stage_end - stage_start).count();
+    // printf("[Time] Calculate Merkle Root: %.3f ms\n", merkle_time / 1000.0);
 
-    printf("merkle root(big):    ");
-    print_hex_inverse(merkle_root, 32);
-    printf("\n");
+    // printf("merkle root(big):    ");
+    // print_hex_inverse(merkle_root, 32);
+    // printf("\n");
 
     // **** 準備 Block Header 模板 ****
-    stage_start = std::chrono::high_resolution_clock::now();
+    // stage_start = std::chrono::high_resolution_clock::now();
     HashBlock block_template;
     convert_string_to_little_endian_bytes((unsigned char *)&block_template.version, version, 8);
     convert_string_to_little_endian_bytes(block_template.prevhash,                  prevhash,    64);
@@ -338,13 +338,13 @@ void solve(FILE *fin, FILE *fout)
     target_hex[sb + 2] = (mant >> (16-rb));
     target_hex[sb + 3] = (mant >> (24-rb));
     
-    stage_end = std::chrono::high_resolution_clock::now();
-    auto prepare_time = std::chrono::duration_cast<std::chrono::microseconds>(stage_end - stage_start).count();
-    printf("[Time] Prepare block header and target: %.3f ms\n", prepare_time / 1000.0);
+    // stage_end = std::chrono::high_resolution_clock::now();
+    // auto prepare_time = std::chrono::duration_cast<std::chrono::microseconds>(stage_end - stage_start).count();
+    // printf("[Time] Prepare block header and target: %.3f ms\n", prepare_time / 1000.0);
     
-    printf("Target value (big): ");
-    print_hex_inverse(target_hex, 32);
-    printf("\n");
+    // printf("Target value (big): ");
+    // print_hex_inverse(target_hex, 32);
+    // printf("\n");
 
     // ********** CUDA 執行 **********
     
@@ -354,7 +354,7 @@ void solve(FILE *fin, FILE *fout)
     cudaEventCreate(&cuda_end);
     
     // **** CUDA 記憶體配置 ****
-    stage_start = std::chrono::high_resolution_clock::now();
+    // stage_start = std::chrono::high_resolution_clock::now();
     
     // 在 GPU 上配置記憶體，用於接收答案
     unsigned int *d_solution_nonce;
@@ -373,9 +373,9 @@ void solve(FILE *fin, FILE *fout)
     cudaMemcpyToSymbol(g_block_template, &block_template, sizeof(HashBlock));
     cudaMemcpyToSymbol(g_target_hex, target_hex, 32);
     
-    stage_end = std::chrono::high_resolution_clock::now();
-    auto mem_alloc_time = std::chrono::duration_cast<std::chrono::microseconds>(stage_end - stage_start).count();
-    printf("[Time] CUDA memory allocation and copy: %.3f ms\n", mem_alloc_time / 1000.0);
+    // stage_end = std::chrono::high_resolution_clock::now();
+    // auto mem_alloc_time = std::chrono::duration_cast<std::chrono::microseconds>(stage_end - stage_start).count();
+    // printf("[Time] CUDA memory allocation and copy: %.3f ms\n", mem_alloc_time / 1000.0);
 
     
     // ********** 啟動 Kernel **************
@@ -384,7 +384,7 @@ void solve(FILE *fin, FILE *fout)
     int threadsPerBlock = 192;
     int blocksPerGrid = 80 * 32;
 
-    printf("Starting CUDA kernel (Threads: %d, Blocks: %d) to find nonce...\n", threadsPerBlock, blocksPerGrid);
+    // printf("Starting CUDA kernel (Threads: %d, Blocks: %d) to find nonce...\n", threadsPerBlock, blocksPerGrid);
     
     // 開始計時 Kernel 執行
     cudaEventRecord(cuda_start);
@@ -398,9 +398,9 @@ void solve(FILE *fin, FILE *fout)
     cudaEventRecord(cuda_end);
     cudaEventSynchronize(cuda_end);
     
-    float kernel_time_ms = 0;
-    cudaEventElapsedTime(&kernel_time_ms, cuda_start, cuda_end);
-    printf("[Time] Kernel execution: %.3f ms\n", kernel_time_ms);
+    // float kernel_time_ms = 0;
+    // cudaEventElapsedTime(&kernel_time_ms, cuda_start, cuda_end);
+    // printf("[Time] Kernel execution: %.3f ms\n", kernel_time_ms);
     
     // 檢查 Kernel 啟動是否有錯誤
     err = cudaGetLastError();
@@ -414,34 +414,34 @@ void solve(FILE *fin, FILE *fout)
 
     // ********** 取得結果 **************
     // 將答案 (或 0xFFFFFFFF) 從 GPU 複製回 CPU
-    stage_start = std::chrono::high_resolution_clock::now();
+    // stage_start = std::chrono::high_resolution_clock::now();
     
     cudaMemcpy(&h_solution_nonce, d_solution_nonce, sizeof(unsigned int), cudaMemcpyDeviceToHost);
     
-    stage_end = std::chrono::high_resolution_clock::now();
-    auto copy_back_time = std::chrono::duration_cast<std::chrono::microseconds>(stage_end - stage_start).count();
-    printf("[Time] Copy result back to CPU: %.3f ms\n", copy_back_time / 1000.0);
+    // stage_end = std::chrono::high_resolution_clock::now();
+    // auto copy_back_time = std::chrono::duration_cast<std::chrono::microseconds>(stage_end - stage_start).count();
+    // printf("[Time] Copy result back to CPU: %.3f ms\n", copy_back_time / 1000.0);
 
     // ********** 顯示與清理 **************
 
     if (h_solution_nonce != 0xFFFFFFFF)
     {
-        printf("Found Solution!!\n");
-        printf("Nonce: %u (0x%x)\n", h_solution_nonce, h_solution_nonce);
+        // printf("Found Solution!!\n");
+        // printf("Nonce: %u (0x%x)\n", h_solution_nonce, h_solution_nonce);
         
         // 驗證 (在 CPU 上重算一次，確保 GPU 沒算錯)
-        stage_start = std::chrono::high_resolution_clock::now();
-        block_template.nonce = h_solution_nonce;
-        SHA256 sha256_ctx;
-        double_sha256(&sha256_ctx, (unsigned char*)&block_template, sizeof(block_template));
+        // stage_start = std::chrono::high_resolution_clock::now();
+        // block_template.nonce = h_solution_nonce;
+        // SHA256 sha256_ctx;
+        // double_sha256(&sha256_ctx, (unsigned char*)&block_template, sizeof(block_template));
         
-        stage_end = std::chrono::high_resolution_clock::now();
-        auto verify_time = std::chrono::duration_cast<std::chrono::microseconds>(stage_end - stage_start).count();
-        printf("[Time] CPU verification: %.3f ms\n", verify_time / 1000.0);
+        // stage_end = std::chrono::high_resolution_clock::now();
+        // auto verify_time = std::chrono::duration_cast<std::chrono::microseconds>(stage_end - stage_start).count();
+        // printf("[Time] CPU verification: %.3f ms\n", verify_time / 1000.0);
         
-        printf("Verified Hash (big): ");
-        print_hex_inverse(sha256_ctx.b, 32);
-        printf("\n");
+        // printf("Verified Hash (big): ");
+        // print_hex_inverse(sha256_ctx.b, 32);
+        // printf("\n");
         
         // 寫入檔案
         for(int i=0;i<4;++i)
@@ -456,10 +456,10 @@ void solve(FILE *fin, FILE *fout)
     }
     
     // 計算總時間
-    auto total_end = std::chrono::high_resolution_clock::now();
-    auto total_time = std::chrono::duration_cast<std::chrono::microseconds>(total_end - total_start).count();
-    printf("[Time] ===== Total time: %.3f ms =====\n", total_time / 1000.0);
-    printf("\n");
+    // auto total_end = std::chrono::high_resolution_clock::now();
+    // auto total_time = std::chrono::duration_cast<std::chrono::microseconds>(total_end - total_start).count();
+    // printf("[Time] ===== Total time: %.3f ms =====\n", total_time / 1000.0);
+    // printf("\n");
 
     // 清理 GPU 記憶體和 Event
     cudaFree(d_solution_nonce);
@@ -495,7 +495,7 @@ int main(int argc, char **argv)
 
     for(int i=0;i<totalblock;++i)
     {
-        printf("--- Solving Block %d ---\n", i+1);
+        // printf("--- Solving Block %d ---\n", i+1);
         solve(fin, fout);
     }
     
