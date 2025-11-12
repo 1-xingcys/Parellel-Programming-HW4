@@ -195,6 +195,7 @@ void calc_merkle_root(unsigned char *root, int count, char **branch)
 //
 __constant__ HashBlock g_block_template;
 __constant__ unsigned char g_target_hex[32];
+__constant__ WORD g_midstate[8];             // midstate after first 64 bytes (host precomputed)
 
 
 //
@@ -216,6 +217,11 @@ __global__ void solve_kernel(volatile unsigned int *d_solution_nonce)
     HashBlock local_block = g_block_template;
     SHA256 local_hash_ctx; // 用於儲存 hash 結果
 
+    WORD mid[8];
+#pragma unroll
+    for (int i = 0; i < 8; ++i)
+        mid[i] = g_midstate[i];
+
     for (unsigned long long n = start_nonce; n <= 0xFFFFFFFF; n += stride)
     {
         // --- 檢查是否有人找到了 ---
@@ -232,7 +238,12 @@ __global__ void solve_kernel(volatile unsigned int *d_solution_nonce)
         // 輸入是 80-byte 的 local_block
         // 輸出是 32-byte 的 hash，儲存在 local_hash_ctx.b
         // double_sha256_gpu(&local_hash_ctx, (unsigned char*)&local_block, sizeof(local_block));
-        double_sha256_bitcoin_specialized(&local_hash_ctx, (unsigned char*)&local_block);
+        // double_sha256_bitcoin_specialized(&local_hash_ctx, (unsigned char*)&local_block);
+
+        // 使用 midstate + block 尾段（含 nonce）計算 double SHA256
+        double_sha256_from_midstate(&local_hash_ctx,
+                                    mid,
+                                    (const BYTE*)&local_block);
 
         // --- 檢查答案 ---
         // 比較 hash (local_hash_ctx.b) 是否小於目標 (g_target_hex)
@@ -337,7 +348,12 @@ void solve(FILE *fin, FILE *fout)
     target_hex[sb + 1] = (mant >> (8-rb));
     target_hex[sb + 2] = (mant >> (16-rb));
     target_hex[sb + 3] = (mant >> (24-rb));
-    
+
+    // ========= Host 端計算 midstate =========
+    // 使用 block_template 的前 64 bytes 作為 input
+    WORD midstate[8];
+    sha256_midstate_cpu((BYTE*)&block_template, midstate);
+
     // stage_end = std::chrono::high_resolution_clock::now();
     // auto prepare_time = std::chrono::duration_cast<std::chrono::microseconds>(stage_end - stage_start).count();
     // printf("[Time] Prepare block header and target: %.3f ms\n", prepare_time / 1000.0);
@@ -372,6 +388,7 @@ void solve(FILE *fin, FILE *fout)
     // 3. 將 Block 模板和 Target 複製到 __constant__ 記憶體
     cudaMemcpyToSymbol(g_block_template, &block_template, sizeof(HashBlock));
     cudaMemcpyToSymbol(g_target_hex, target_hex, 32);
+    cudaMemcpyToSymbol(g_midstate, midstate, 8 * sizeof(WORD));
     
     // stage_end = std::chrono::high_resolution_clock::now();
     // auto mem_alloc_time = std::chrono::duration_cast<std::chrono::microseconds>(stage_end - stage_start).count();
@@ -381,8 +398,8 @@ void solve(FILE *fin, FILE *fout)
     // ********** 啟動 Kernel **************
     
     // 配置執行緒網格 (Grid) 和區塊 (Block)
-    int threadsPerBlock = 192;
-    int blocksPerGrid = 80 * 32;
+    int threadsPerBlock = 64;
+    int blocksPerGrid = 80 * 20;
 
     // printf("Starting CUDA kernel (Threads: %d, Blocks: %d) to find nonce...\n", threadsPerBlock, blocksPerGrid);
     

@@ -31,6 +31,14 @@ __device__ void double_sha256_gpu(SHA256 *out, const BYTE *bytes, size_t len);
 // 專門給 80-byte Bitcoin block header 的 double sha256
 __device__ void double_sha256_bitcoin_specialized(SHA256 *out, const BYTE *block80);
 
+// 計算第一輪 SHA 的 midstate：只吃 64 bytes，不做 padding
+void sha256_midstate_cpu(const BYTE *block64, WORD midstate[8]);
+
+// 從 midstate + block tail (含 nonce) 做 double-SHA256（給 GPU kernel 用）
+__device__ void double_sha256_from_midstate(SHA256 *out,
+                                            const WORD midstate[8],
+                                            const BYTE *block80);
+
 #ifdef __cplusplus
 }
 #endif

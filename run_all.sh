@@ -4,6 +4,9 @@ set -euo pipefail
 # 要跑的測資編號
 TESTS=("00" "01" "02" "03")
 
+# 初始化總時間
+GRAND_TOTAL_TIME=0
+
 # summary header
 echo "case correctness total_time_ms occupancy_pct"
 
@@ -44,4 +47,13 @@ for t in "${TESTS[@]}"; do
 
     # 5. 印出 summary
     echo "case${t} ${correctness} ${total_time_ms} ${occupancy_pct}"
+    
+    # 累加總時間
+    GRAND_TOTAL_TIME=$(awk "BEGIN {print $GRAND_TOTAL_TIME + $total_time_ms}")
 done
+
+# 印出所有測資的總時間
+echo ""
+echo "=========================================="
+echo "Total time (all cases): ${GRAND_TOTAL_TIME} ms"
+echo "=========================================="
