@@ -16,10 +16,12 @@
 ### 記憶體優化
 
 1. **Constant Memory**
+
    - 使用 `cudaMemcpyToSymbol` 將 block template 和 target difficulty 複製至 constant memory
    - 提供高效的唯讀存取
 
 2. **SHA-256 最佳化**
+
    - 針對固定長度（80 bytes 和 32 bytes）特化 SHA-256 函數，移除不必要的長度檢查
    - 將原本 64 個 words 的陣列改為 16 個 words 的循環緩衝區，使其能放入暫存器
    - 展開迴圈並使用純量變數，消除陣列索引計算
@@ -45,6 +47,7 @@ make
 ```
 
 範例：
+
 ```bash
 ./hw4 ../testcases/case00.in output.out
 ```
@@ -58,11 +61,10 @@ make clean
 ## 檔案結構
 
 ```
-b10705009/
 ├── hw4.cu           # 主程式（包含 CUDA kernel 與 host code）
 ├── sha256.cu        # SHA-256 實作（CPU 與 GPU 版本）
 ├── sha256.h         # SHA-256 標頭檔
+├── serial.cu        # 未平行化的序列版本
 ├── Makefile         # 編譯設定
 └── report.pdf       # 實驗報告
 ```
-
